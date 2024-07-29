@@ -1,0 +1,16 @@
+[package]
+name = "update-qtile"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qtile-cmd-client = { git = "https://github.com/ervinpopescu/qtile-cmd-client" }
+anyhow = { version = "1.0.86" }
+serde_json = { version = "1.0.120" }
+simple_logger = { version = "5" }
+log = { version = "0.4.22" }
+clap = { version = "4.5.11", features = ["derive", "string"] }
+git2 = "0.19.0"
+regex = "1.10.5"
+subprocess = { version = "0.2.9" }
+text_io = "0.1.12"
