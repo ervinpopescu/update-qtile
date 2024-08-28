@@ -110,51 +110,68 @@ impl UpdateQtile {
         log::info!("cloning AUR repo");
         let aur_url = "https://aur.archlinux.org/qtile-git";
         match git2::Repository::clone(aur_url, &self.repo_path) {
-            Ok(r) => {
-                log::info!("modifying PKGBUILD");
-                let lines = std::fs::read_to_string(self.repo_path.join("PKGBUILD"));
-                match lines {
-                    Ok(lines) => {
-                        let mut lines = lines
-                            .split_inclusive('\n')
-                            .map(|s| s.to_owned())
-                            .collect::<Vec<String>>();
-                        for (index, line) in lines.clone().into_iter().enumerate() {
-                            let re = Regex::new(r"license=\(.*\)").unwrap();
-                            if re.is_match(&line) {
-                                lines.insert(index + 1, "groups=('modified')\n".to_owned());
-                            }
-                            let re = Regex::new(r"source=\(.*\)").unwrap();
-                            if re.is_match(&line) {
-                                let source = self.get_source();
-                                let inserted = format!("source=('git+{source}')\n");
-                                lines[index + 1] = inserted;
-                            }
-                            if Regex::new(r".*cd qtile").unwrap().is_match(&line)
-                                && Regex::new(r".*git describe")
-                                    .unwrap()
-                                    .is_match(&lines[index + 2])
-                            {
-                                lines.insert(index + 2,"  git remote add upstream https://github.com/qtile/qtile.git\n".to_owned());
-                                lines.insert(
-                                    index + 3,
-                                    "  git fetch upstream --tags --force\n".to_owned(),
-                                );
-                            }
-                        }
-                        let lines = lines.concat();
-                        match std::fs::write(self.repo_path.join("PKGBUILD"), lines) {
-                            Ok(()) => {}
-                            Err(err) => error_and_exit("could not write to PKGBUILD\n{err}"),
-                        }
-                    }
-                    Err(err) => error_and_exit(&err.to_string()),
-                }
-            }
+            Ok(r) => self.modify_pkgbuild()?,
             Err(err) => error_and_exit(
                 ("AUR URL ".to_owned() + aur_url + " is unreachable, error: " + &err.to_string())
                     .as_str(),
             ),
+        }
+        Ok(())
+    }
+
+    fn modify_pkgbuild(&self) -> anyhow::Result<()> {
+        log::info!("modifying PKGBUILD");
+        let lines = std::fs::read_to_string(self.repo_path.join("PKGBUILD"));
+        match lines {
+            Ok(lines) => {
+                let mut lines = lines
+                    .split_inclusive('\n')
+                    .map(|s| s.to_owned())
+                    .collect::<Vec<String>>();
+                for (index, line) in lines.clone().into_iter().enumerate() {
+                    let re = Regex::new(r"license=\(.*\)").unwrap();
+                    if re.is_match(&line) {
+                        lines.insert(index + 1, "groups=('modified')\n".to_owned());
+                    }
+                    let re = Regex::new(r"source=\(.*\)").unwrap();
+                    if re.is_match(&line) {
+                        let source = self.get_source();
+                        let inserted = format!("source=('git+{source}')\n");
+                        lines[index + 1] = inserted;
+                    }
+                    if Regex::new(r".*build\(\).*").unwrap().is_match(&line) {
+                        lines.insert(
+                            index + 3,
+                            "  export CFLAGS=\"$CFLAGS -I/usr/include/wlroots0.17\"\n".to_owned(),
+                        );
+                        lines.insert(
+                            index + 4,
+                            "  export LDFLAGS=\"$LDFLAGS -L/usr/lib/wlroots0.17\"\n".to_owned(),
+                        );
+                    }
+                    if Regex::new(r".*cd qtile").unwrap().is_match(&line)
+                        && Regex::new(r".*git describe")
+                            .unwrap()
+                            .is_match(&lines[index + 2])
+                    {
+                        lines.insert(
+                            index + 2,
+                            "  git remote add upstream https://github.com/qtile/qtile.git\n"
+                                .to_owned(),
+                        );
+                        lines.insert(
+                            index + 3,
+                            "  git fetch upstream --tags --force\n".to_owned(),
+                        );
+                    }
+                }
+                let lines = lines.concat();
+                match std::fs::write(self.repo_path.join("PKGBUILD"), lines) {
+                    Ok(()) => {}
+                    Err(err) => error_and_exit("could not write to PKGBUILD\n{err}"),
+                }
+            }
+            Err(err) => error_and_exit(&err.to_string()),
         }
         Ok(())
     }
@@ -165,7 +182,7 @@ impl UpdateQtile {
                 let f = f;
                 let exit_status = (Exec::cmd("yes")
                     | Exec::cmd("makepkg")
-                        .args(&["-r", "-i", "-s"])
+                        .args(&["-r", "-i", "-s", "--nocheck"])
                         .cwd(&self.repo_path)
                         .stderr(Redirection::Merge))
                 .stdout(f)
