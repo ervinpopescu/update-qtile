@@ -139,16 +139,16 @@ impl UpdateQtile {
                         let inserted = format!("source=('git+{source}')\n");
                         lines[index + 1] = inserted;
                     }
-                    if Regex::new(r".*build\(\).*").unwrap().is_match(&line) {
-                        lines.insert(
-                            index + 3,
-                            "  export CFLAGS=\"$CFLAGS -I/usr/include/wlroots0.17\"\n".to_owned(),
-                        );
-                        lines.insert(
-                            index + 4,
-                            "  export LDFLAGS=\"$LDFLAGS -L/usr/lib/wlroots0.17\"\n".to_owned(),
-                        );
-                    }
+                    //if Regex::new(r".*build\(\).*").unwrap().is_match(&line) {
+                    //    lines.insert(
+                    //        index + 3,
+                    //        "  export CFLAGS=\"$CFLAGS -I/usr/include/wlroots0.17\"\n".to_owned(),
+                    //    );
+                    //    lines.insert(
+                    //        index + 4,
+                    //        "  export LDFLAGS=\"$LDFLAGS -L/usr/lib/wlroots0.17\"\n".to_owned(),
+                    //    );
+                    //}
                     if Regex::new(r".*cd qtile").unwrap().is_match(&line)
                         && Regex::new(r".*git describe")
                             .unwrap()
