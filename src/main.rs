@@ -1,4 +1,5 @@
-use std::{path::Path, process::exit};
+use std::io::Write;
+use std::{fs::OpenOptions, path::Path, process::exit};
 
 use clap::Parser;
 use qtile_client_lib::utils::client::InteractiveCommandClient;
@@ -72,17 +73,16 @@ impl UpdateQtile {
             source
         }
     }
-    fn remove_dir(&self) -> anyhow::Result<()> {
+    fn remove_repo(&self) -> anyhow::Result<()> {
         if self.repo_path.exists() {
-            log::info!("removing cached AUR repo");
+            log::info!("removing cached AUR repo {:?}", self.repo_path);
             match std::fs::remove_dir_all(&self.repo_path) {
-                Ok(()) => log::info!("removed {:?}", self.repo_path),
+                Ok(()) => {}
                 Err(err) => {
                     log::error!("couldn't remove AUR cached repo");
                     log::error!("\tError: {err}");
-                    println!("Would you like to try with root permissions? [Y/n]");
+                    log::info!("Would you like to try with root permissions? [Y/n]");
                     let ans: String = read!("{}\n");
-                    log::info!("{ans}");
                     if ["Y", "y", ""].contains(&ans.as_str()) {
                         let repo_path = self.repo_path.as_os_str();
                         let exit_status = Exec::shell(format!("sudo rm -rf {repo_path:?}"))
@@ -98,7 +98,7 @@ impl UpdateQtile {
         }
         Ok(())
     }
-    fn clone_dir(&self) -> anyhow::Result<()> {
+    fn clone_repo(&self) -> anyhow::Result<()> {
         log::info!("cloning AUR repo");
         let aur_url = "https://aur.archlinux.org/qtile-git";
         match git2::Repository::clone(aur_url, &self.repo_path) {
@@ -167,22 +167,134 @@ impl UpdateQtile {
         }
         Ok(())
     }
+
+    fn remove_file_or_dir_if_exists(&self, path: &str) -> anyhow::Result<()> {
+        if let Ok(true) = std::fs::exists(path) {
+            let filetype = std::fs::metadata(path).unwrap().file_type();
+            if filetype.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            }
+            if filetype.is_file() {
+                std::fs::remove_file(path)?;
+            }
+        }
+        Ok(())
+    }
+
     fn install(self) -> anyhow::Result<()> {
-        log::info!("installing with `makepkg`");
+        log::info!("building with `makepkg`");
         match std::fs::File::create(self.repo_path.join("install.log")) {
-            Ok(f) => {
-                let f = f;
+            Ok(_) => {
+                let mut f = OpenOptions::new()
+                    .write(true)
+                    .append(true)
+                    .open(self.repo_path.join("install.log"))
+                    .unwrap();
+                writeln!(
+                    f,
+                    "\n------------------------------- building new package -------------------------------\n"
+                )?;
                 let exit_status = (Exec::cmd("yes")
                     | Exec::cmd("makepkg")
-                        .args(&["-r", "-i", "-s", "--nocheck"])
+                        .args(&["-rsc", "--nocheck"])
                         .cwd(&self.repo_path)
                         .stderr(Redirection::Merge))
-                .stdout(f)
+                .stdout(
+                    f.try_clone()
+                        .expect("no one is writing to the install log now"),
+                )
                 .join()?
                 .success();
                 match exit_status {
                     true => {
-                        log::info!("installed successfully");
+                        log::info!("removing old package");
+                        // let f = std::fs::File::create(self.repo_path.join("install.log")).unwrap();
+                        writeln!(f, "\n------------------------------- removing old package -------------------------------\n")?;
+
+                        if Exec::cmd("sudo")
+                            .args(&["pacman", "-Qq", "qtile-git"])
+                            .cwd(&self.repo_path)
+                            .stderr(Redirection::Merge)
+                            .stdout(
+                                f.try_clone()
+                                    .expect("no one is writing to the install log now"),
+                            )
+                            .join()?
+                            .success()
+                        {
+                            // let f =
+                            //     std::fs::File::create(self.repo_path.join("install.log")).unwrap();
+                            // let exit_status = (Exec::cmd("yes")
+                            //     | Exec::cmd("sudo")
+                            //         .args(&["pacman", "-Rns", "qtile-git"])
+                            //         .cwd(&self.repo_path)
+                            //         .stderr(Redirection::Merge))
+                            // .stdout(f)
+                            // .join()?
+                            // .success();
+                            // match exit_status {
+                            //     true => {}
+                            //     false => error_and_exit(
+                            //         format!(
+                            //             "Qtile uninstall failed, check in {}/install.log",
+                            //             &self.repo_path.to_str().unwrap()
+                            //         )
+                            //         .as_str(),
+                            //     ),
+                            // }
+                        } else {
+                            let to_be_deleted = [
+                                "/usr/bin/qtile",
+                                "/usr/lib/python3.12/site-packages/libqtile",
+                                "/usr/share/doc/qtile-git",
+                                "/usr/share/licenses/qtile-git/LICENSE",
+                                "/usr/share/wayland-sessions/qtile-wayland.desktop",
+                                "/usr/share/xsessions/qtile.desktop",
+                            ];
+                            for s in to_be_deleted {
+                                self.remove_file_or_dir_if_exists(s)?;
+                            }
+                        }
+                        log::info!("installing new package");
+                        writeln!(f, "\n------------------------------- installing new package -------------------------------\n")?;
+                        let exit_status = (Exec::cmd("yes")
+                            | Exec::cmd("sudo")
+                                .args(&[
+                                    "pacman",
+                                    "-U",
+                                    glob::glob(
+                                        format!(
+                                            "{}/{}",
+                                            self.repo_path.to_str().unwrap(),
+                                            "*.tar.zst"
+                                        )
+                                        .as_str(),
+                                    )
+                                    .unwrap()
+                                    .next()
+                                    .unwrap()
+                                    .unwrap()
+                                    .to_str()
+                                    .expect("package built successfully"),
+                                    "--overwrite",
+                                    "'*'",
+                                ])
+                                .cwd(&self.repo_path)
+                                .stderr(Redirection::Merge))
+                        .stdout(
+                            f.try_clone()
+                                .expect("no one is writing to the install log now"),
+                        )
+                        .join()?
+                        .success();
+                        match exit_status {
+                            true => {}
+                            false => log::error!(
+                                "Qtile install failed, check in {}/install.log",
+                                &self.repo_path.to_str().unwrap()
+                            ),
+                        }
+                        writeln!(f, "\n------------------------------- package installed successfully -------------------------------")?;
                         if self.args.restart {
                             log::info!("restarting");
                             let response = InteractiveCommandClient::call(
@@ -199,18 +311,19 @@ impl UpdateQtile {
                                     | serde_json::Value::String(_)
                                     | serde_json::Value::Array(_)
                                     | serde_json::Value::Object(_) => {
-                                        log::error!("restart failed, please restart manually");
-                                        exit(1);
+                                        error_and_exit("restart failed, please restart manually");
                                     }
                                 },
                                 Err(err) => error_and_exit(
                                     (err.to_string() + "\nQtile is probably not running").as_str(),
                                 ),
                             }
+                        } else {
+                            log::info!("please restart qtile");
                         }
                     }
                     false => log::error!(
-                        "Qtile install failed, check in {}/install.log",
+                        "Qtile build failed, check in {}/install.log",
                         &self.repo_path.to_str().unwrap()
                     ),
                 }
@@ -228,8 +341,8 @@ fn main() {
         .unwrap();
     let args = Args::parse();
     let up = UpdateQtile::new(args);
-    match up.remove_dir() {
-        Ok(()) => match up.clone_dir() {
+    match up.remove_repo() {
+        Ok(()) => match up.clone_repo() {
             Ok(()) => match up.install() {
                 Ok(()) => {}
                 Err(err) => {
