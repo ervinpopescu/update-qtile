@@ -52,22 +52,22 @@ impl UpdateQtile {
         Self { repo_path, args }
     }
     fn get_source(&self) -> String {
-        let source = if let Some(p) = &self.args.path {
-            format!("file://{p}")
-        } else if let Some(f) = &self.args.fork {
-            format!("https://github.com/{f}/qtile")
+        let source = if let Some(path) = &self.args.path {
+            format!("file://{path}")
+        } else if let Some(fork) = &self.args.fork {
+            format!("https://github.com/{fork}/qtile")
         } else {
             "https://github.com/qtile/qtile".to_owned()
         };
-        if let Some(c) = &self.args.commit {
-            log::info!("selected repo `{}` - commit `{}`", source, c);
-            format!("{}#commit={}", source, c)
-        } else if let Some(t) = &self.args.tag {
-            log::info!("selected repo `{}` - tag `{}`", source, t);
-            format!("{}#tag={}", source, t)
-        } else if let Some(b) = &self.args.branch {
-            log::info!("selected repo `{}` - branch `{}`", source, b);
-            format!("{}#branch={}", source, b)
+        if let Some(commit) = &self.args.commit {
+            log::info!("selected repo `{}` - commit `{}`", source, commit);
+            format!("{}#commit={}", source, commit)
+        } else if let Some(tag) = &self.args.tag {
+            log::info!("selected repo `{}` - tag `{}`", source, tag);
+            format!("{}#tag={}", source, tag)
+        } else if let Some(branch) = &self.args.branch {
+            log::info!("selected repo `{}` - branch `{}`", source, branch);
+            format!("{}#branch={}", source, branch)
         } else {
             log::info!("selected repo `{}` - branch `master`", source);
             source
@@ -98,11 +98,11 @@ impl UpdateQtile {
         }
         Ok(())
     }
-    fn clone_repo(&self) -> anyhow::Result<()> {
+    fn clone_repo(&self, source: String) -> anyhow::Result<()> {
         log::info!("cloning AUR repo");
         let aur_url = "https://aur.archlinux.org/qtile-git";
         match git2::Repository::clone(aur_url, &self.repo_path) {
-            Ok(_) => self.modify_pkgbuild()?,
+            Ok(_) => self.modify_pkgbuild(source)?,
             Err(err) => error_and_exit(
                 ("AUR URL ".to_owned() + aur_url + " is unreachable, error: " + &err.to_string())
                     .as_str(),
@@ -111,7 +111,7 @@ impl UpdateQtile {
         Ok(())
     }
 
-    fn modify_pkgbuild(&self) -> anyhow::Result<()> {
+    fn modify_pkgbuild(&self, source: String) -> anyhow::Result<()> {
         log::info!("modifying PKGBUILD");
         let lines = std::fs::read_to_string(self.repo_path.join("PKGBUILD"));
         match lines {
@@ -120,17 +120,16 @@ impl UpdateQtile {
                     .split_inclusive('\n')
                     .map(|s| s.to_owned())
                     .collect::<Vec<String>>();
-                let license = Regex::new(r"license=\(.*\)").unwrap();
-                let source = Regex::new(r"source=\(.*\)").unwrap();
-                let cd = Regex::new(r".*cd qtile").unwrap();
-                let describe = Regex::new(r".*git describe").unwrap();
+                let license_regex = Regex::new(r"license=\(.*\)").unwrap();
+                let source_regex = Regex::new(r"source=\(.*\)").unwrap();
+                let cd_regex = Regex::new(r".*cd qtile").unwrap();
+                let describe_regex = Regex::new(r".*git describe").unwrap();
                 for (index, line) in lines.clone().into_iter().enumerate() {
-                    if license.is_match(&line) {
+                    if license_regex.is_match(&line) {
                         lines.insert(index + 1, "groups=('modified')\n".to_owned());
                     }
-                    if source.is_match(&line) {
-                        let source = self.get_source();
-                        let inserted = format!("source=('git+{source}')\n");
+                    if source_regex.is_match(&line) {
+                        let inserted = format!("source=('git+{}')\n", source);
                         lines[index + 1] = inserted;
                     }
                     //if Regex::new(r".*build\(\).*").unwrap().is_match(&line) {
@@ -143,7 +142,7 @@ impl UpdateQtile {
                     //        "  export LDFLAGS=\"$LDFLAGS -L/usr/lib/wlroots0.17\"\n".to_owned(),
                     //    );
                     //}
-                    if cd.is_match(&line) && describe.is_match(&lines[index + 2]) {
+                    if cd_regex.is_match(&line) && describe_regex.is_match(&lines[index + 2]) {
                         lines.insert(
                             index + 2,
                             "  git remote add upstream https://github.com/qtile/qtile.git\n"
@@ -186,7 +185,6 @@ impl UpdateQtile {
         match std::fs::File::create(self.repo_path.join("install.log")) {
             Ok(_) => {
                 let mut f = OpenOptions::new()
-                    .write(true)
                     .append(true)
                     .open(self.repo_path.join("install.log"))
                     .unwrap();
@@ -208,7 +206,6 @@ impl UpdateQtile {
                 match exit_status {
                     true => {
                         log::info!("removing old package");
-                        // let f = std::fs::File::create(self.repo_path.join("install.log")).unwrap();
                         writeln!(f, "\n------------------------------- removing old package -------------------------------\n")?;
 
                         if Exec::cmd("sudo")
@@ -341,8 +338,9 @@ fn main() {
         .unwrap();
     let args = Args::parse();
     let up = UpdateQtile::new(args);
+    let source = up.get_source();
     match up.remove_repo() {
-        Ok(()) => match up.clone_repo() {
+        Ok(()) => match up.clone_repo(source) {
             Ok(()) => match up.install() {
                 Ok(()) => {}
                 Err(err) => {
