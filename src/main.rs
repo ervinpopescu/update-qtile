@@ -20,14 +20,16 @@ pub struct Args {
         conflicts_with = "path"
     )]
     fork: Option<String>,
-    #[arg(short, long, num_args = 1, default_value = None, group = "remote")]
+    #[arg(short='P', long, num_args = 1, default_value = None, group = "remote")]
     path: Option<String>,
-    #[arg(short, long, num_args = 1, default_value = None, group = "identifier",conflicts_with_all = ["branch", "tag"])]
+    #[arg(short, long, num_args = 1, default_value = None, group = "identifier",conflicts_with_all = ["branch", "tag", "pull"])]
     commit: Option<String>,
     #[arg(short, long, num_args = 1, default_value = None, group = "identifier")]
     branch: Option<String>,
     #[arg(short, long, num_args = 1, default_value = None, group = "identifier")]
     tag: Option<String>,
+    #[arg(short='p', long, default_value =  None, group = "identifier")]
+    pull: Option<String>,
     #[arg(short, long, default_value_t = false)]
     restart: bool,
 }
@@ -35,6 +37,10 @@ pub struct Args {
 fn error_and_exit(err: &str) {
     log::error!("{err}");
     exit(1);
+}
+struct Source {
+    remote: String,
+    pull: bool,
 }
 
 struct UpdateQtile {
@@ -51,7 +57,7 @@ impl UpdateQtile {
             .into();
         Self { repo_path, args }
     }
-    fn get_source(&self) -> String {
+    fn get_source(&self) -> Source {
         let source = if let Some(path) = &self.args.path {
             format!("file://{path}")
         } else if let Some(fork) = &self.args.fork {
@@ -61,16 +67,34 @@ impl UpdateQtile {
         };
         if let Some(commit) = &self.args.commit {
             log::info!("selected repo `{}` - commit `{}`", source, commit);
-            format!("{}#commit={}", source, commit)
-        } else if let Some(tag) = &self.args.tag {
-            log::info!("selected repo `{}` - tag `{}`", source, tag);
-            format!("{}#tag={}", source, tag)
+            Source {
+                remote: format!("{}#commit={}", source, commit),
+                pull: false,
+            }
         } else if let Some(branch) = &self.args.branch {
             log::info!("selected repo `{}` - branch `{}`", source, branch);
-            format!("{}#branch={}", source, branch)
+            Source {
+                remote: format!("{}#branch={}", source, branch),
+                pull: false,
+            }
+        } else if let Some(tag) = &self.args.tag {
+            log::info!("selected repo `{}` - tag `{}`", source, tag);
+            Source {
+                remote: format!("{}#tag={}", source, tag),
+                pull: false,
+            }
+        } else if let Some(pull) = &self.args.pull {
+            log::info!("selected repo `{}` - PR `{}`", source, pull);
+            Source {
+                remote: source,
+                pull: true,
+            }
         } else {
             log::info!("selected repo `{}` - branch `master`", source);
-            source
+            Source {
+                remote: source,
+                pull: false,
+            }
         }
     }
     fn remove_repo(&self) -> anyhow::Result<()> {
@@ -98,7 +122,7 @@ impl UpdateQtile {
         }
         Ok(())
     }
-    fn clone_repo(&self, source: String) -> anyhow::Result<()> {
+    fn clone_repo(&self, source: Source) -> anyhow::Result<()> {
         log::info!("cloning AUR repo");
         let aur_url = "https://aur.archlinux.org/qtile-git";
         match git2::Repository::clone(aur_url, &self.repo_path) {
@@ -111,7 +135,7 @@ impl UpdateQtile {
         Ok(())
     }
 
-    fn modify_pkgbuild(&self, source: String) -> anyhow::Result<()> {
+    fn modify_pkgbuild(&self, source: Source) -> anyhow::Result<()> {
         log::info!("modifying PKGBUILD");
         let lines = std::fs::read_to_string(self.repo_path.join("PKGBUILD"));
         match lines {
@@ -122,14 +146,14 @@ impl UpdateQtile {
                     .collect::<Vec<String>>();
                 let license_regex = Regex::new(r"license=\(.*\)").unwrap();
                 let source_regex = Regex::new(r"source=\(.*\)").unwrap();
-                let cd_regex = Regex::new(r".*cd qtile").unwrap();
                 let describe_regex = Regex::new(r".*git describe").unwrap();
                 for (index, line) in lines.clone().into_iter().enumerate() {
                     if license_regex.is_match(&line) {
                         lines.insert(index + 1, "groups=('modified')\n".to_owned());
                     }
                     if source_regex.is_match(&line) {
-                        let inserted = format!("source=('git+{}')\n", source);
+                        let remote = source.remote.clone();
+                        let inserted = format!("source=('git+{}')\n", remote);
                         lines[index + 1] = inserted;
                     }
                     //if Regex::new(r".*build\(\).*").unwrap().is_match(&line) {
@@ -142,16 +166,30 @@ impl UpdateQtile {
                     //        "  export LDFLAGS=\"$LDFLAGS -L/usr/lib/wlroots0.17\"\n".to_owned(),
                     //    );
                     //}
-                    if cd_regex.is_match(&line) && describe_regex.is_match(&lines[index + 2]) {
+                    if describe_regex.is_match(&line) {
                         lines.insert(
-                            index + 2,
+                            index + 1,
                             "  git remote add upstream https://github.com/qtile/qtile.git\n"
                                 .to_owned(),
                         );
                         lines.insert(
-                            index + 3,
+                            index + 2,
                             "  git fetch upstream --tags --force\n".to_owned(),
                         );
+                        if source.pull && self.args.pull.is_some() {
+                            lines.insert(
+                                index + 3,
+                                format!(
+                                    "  git fetch upstream pull/{}/head:pr{}\n",
+                                    self.args.pull.as_ref().unwrap(),
+                                    self.args.pull.as_ref().unwrap()
+                                ),
+                            );
+                            lines.insert(
+                                index + 4,
+                                format!("  git checkout pr{}\n", self.args.pull.as_ref().unwrap()),
+                            );
+                        }
                     }
                 }
                 let lines = lines.concat();
