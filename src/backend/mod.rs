@@ -1,4 +1,6 @@
 // src/backend/mod.rs
+pub mod arch;
+
 use clap::ValueEnum;
 use std::path::Path;
 use std::process::exit;
