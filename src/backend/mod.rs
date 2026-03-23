@@ -1,5 +1,6 @@
 // src/backend/mod.rs
 pub mod arch;
+pub mod uv;
 
 use clap::ValueEnum;
 use std::path::Path;
