@@ -1,5 +1,5 @@
 [package]
-name = "update-qtile"
+name = "qup"
 version = "0.1.0"
 edition = "2021"
 
@@ -15,3 +15,4 @@ serde_json = { version = "1.0.133" }
 simple_logger = { version = "5" }
 subprocess = { version = "0.2.9" }
 text_io = { version = "0.1.12" }
+which = { version = "7" }
